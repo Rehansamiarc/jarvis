@@ -1,0 +1,28 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/reminders",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/jobs",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/digest",
+      "schedule": "0 13 * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/cron/**/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/agent/run/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/knowledge/**/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

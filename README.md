@@ -1,36 +1,253 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# JARVIS
 
-## Getting Started
+A personal AI operator: a voice-enabled assistant that remembers you, searches your own
+knowledge, runs multi-step tasks against real services, and asks before it does anything
+consequential. Built on Next.js (App Router), Supabase (Postgres + pgvector + Auth + RLS)
+and deployable to Vercel.
 
-First, run the development server:
+Nothing here is a mock: every tool either performs a real API call or reports precisely why
+it could not (missing credential, missing scope, platform restriction).
+
+---
+
+## 1. What is actually implemented
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Conversational agent loop (plan → select tools → validate → execute → verify) | **Working** | Bounded steps, retries, per-run execution log, cancellation |
+| Central tool registry with per-tool Zod schemas | **Working** | 25 tools; JSON Schema generated from the same Zod objects the server validates with |
+| Task-driven tool loading (only relevant tools sent to the model) | **Working** | Core set + intent routing + budget, with `load_tools` for the rest |
+| Permission engine (read / write / high risk + connection requirements) | **Working** | Independent of the model; approval gate cannot be widened by prompt injection |
+| Approval checkpoints for consequential actions | **Working** | Server-built preview of the exact payload; signed, expiring pending actions |
+| Persistent memory (searchable, editable, exportable, deletable) | **Working** | Separate from documents and from conversation history |
+| Knowledge base: ingest → chunk → embed → pgvector, hybrid search, citations | **Working** | Requires `OPENAI_API_KEY` for embeddings; degrades to keyword-only search without it |
+| Reminders, recurrence (RRULE), timezone handling, missed-run recovery | **Working** | Postgres-backed queue; delivery via cron, not the open browser tab |
+| Background jobs, digests, retries with exponential backoff, dead-letter | **Working** | Claim/complete functions in SQL, one sweeper endpoint |
+| WordPress (search, drafts, publish, comments, status) | **Working once connected** | Application password or OAuth; publish/delete always requires approval |
+| YouTube (channel, videos, analytics, metadata drafts, upload) | **Working once connected** | Upload needs the `youtube.upload` scope and a verified account; quota-limited |
+| Gmail (read, draft, send) | **Working once connected** | Send requires approval; delivery is Gmail's, not inferred |
+| Email via Resend (fallback channel) | **Working once configured** | Used when Gmail is not connected |
+| Web search (Serper) | **Working once configured** | Results are untrusted content, never instructions |
+| Voice: speech recognition + TTS, barge-in, wake word (opt-in) | **Working (browser)** | Uses Web Speech APIs — no background listening when the tab is closed |
+| Multi-model routing, capability checks, provider fallback | **Working** | Primary + specialist roles (coding/research/summary/vision/speech/embedding) |
+| Encryption of OAuth tokens and app passwords at rest | **Working** | AES-256-GCM, server-only key, versioned envelope |
+| Row Level Security on every user-owned row | **Working** | `auth.uid() = user_id` predicate; service-role calls are always user-filtered |
+| Unit tests | **Working** | 68 tests across crypto, policy, tools, knowledge, scheduler, models |
+
+**Not implemented, and not claimed:** continuous background listening, "send" on platforms
+without an official API, autonomous publishing without approval, arbitrary code execution,
+and unrestricted database access. Those are deliberate.
+
+---
+
+## 2. Quick start
 
 ```bash
+npm install
+cp .env.example .env.local     # then fill it in (see §3)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 and sign in. The first sign-up creates your account; Supabase
+sends a confirmation email.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Database
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Create a Supabase project, then apply the versioned migrations:
 
-## Learn More
+```bash
+supabase link --project-ref <your-ref>
+npm run db:migrate           # supabase db push
+```
 
-To learn more about Next.js, take a look at the following resources:
+Migrations live in `supabase/migrations` and must be applied in order:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. `..._extensions_enums.sql` — pgvector, enums
+2. `..._tables_core.sql` — identity, conversations, memory, work, integrations
+3. `..._tables_knowledge_ai.sql` — documents, chunks, embeddings, model config, execution logs
+4. `..._functions_triggers.sql` — hybrid search, updated_at, ownership triggers
+5. `..._rls_policies.sql` — Row Level Security for every table
+6. `..._seed_registry.sql` — platform model defaults and tool metadata
+7. `..._scheduler_functions.sql` — job claim/complete with backoff and dead-lettering
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## 3. Environment variables
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Everything is optional at boot: missing configuration degrades a specific feature and is
+reported in the UI instead of crashing the app. `availability()` in `src/lib/env.ts` is the
+single source of truth for "what works right now".
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Required for the app to be usable
+
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public anon key (RLS applies) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only; reads encrypted credentials, refreshes OAuth tokens. Never sent to the browser |
+| `SECRET_ENCRYPTION_KEY` | 32 bytes for AES-256-GCM. Base64/hex/passphrase all accepted |
+| `NEXT_PUBLIC_APP_URL` | Canonical origin, used for OAuth redirects and auth callbacks |
+| `OPENAI_API_KEY` | Model calls and embeddings |
+
+### Scheduling
+
+| Variable | Purpose |
+| --- | --- |
+| `CRON_SECRET` | Bearer token required by `/api/cron/*`. Vercel Cron sends it automatically |
+
+Cron is declared in `vercel.json`:
+
+- `/api/cron/reminders` — every minute (reminder delivery)
+- `/api/cron/jobs` — every 5 minutes (automations, digests, re-indexing)
+- `/api/cron/digest` — daily briefing
+
+### Models (all optional; sane defaults apply)
+
+`JARVIS_MODEL_PRIMARY`, `JARVIS_MODEL_CODING`, `JARVIS_MODEL_RESEARCH`,
+`JARVIS_MODEL_SUMMARY`, `JARVIS_MODEL_VISION`, `JARVIS_MODEL_SPEECH`,
+`JARVIS_EMBEDDING_MODEL`, `JARVIS_EMBEDDING_DIM`, `OPENAI_BASE_URL`.
+
+Per-account overrides live in the `model_config` table and take precedence over env.
+
+### Integrations
+
+| Variable | Purpose |
+| --- | --- |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Gmail + YouTube OAuth. Redirect URI: `${NEXT_PUBLIC_APP_URL}/api/oauth/google/callback` |
+| `SERPER_API_KEY` | Web search |
+| `RESEND_API_KEY`, `RESEND_FROM` | Email fallback when Gmail is not connected |
+| `WORDPRESS_SITE_URL`, `WORDPRESS_USERNAME`, `WORDPRESS_APP_PASSWORD` | Optional default WordPress site; per-user credentials can be added in Settings |
+
+**Secrets never reach the browser.** Provider keys are read only from server modules
+(`src/lib/env.ts`), credential columns are sealed with `src/lib/crypto/secrets.ts`, and the
+RLS policies do not grant `SELECT` on those columns to client sessions.
+
+---
+
+## 4. Verifying it works
+
+```bash
+npm run typecheck     # tsc --noEmit
+npm run lint          # eslint (includes React Compiler hook rules)
+npm test              # vitest — 68 unit tests
+npm run build         # production build
+```
+
+Health check once deployed:
+
+```bash
+curl -s https://your-app.vercel.app/api/health | jq
+```
+
+It reports which capabilities are configured, without revealing any secret values.
+
+### What the tests cover
+
+- **crypto** — seal/unseal round-trip, tamper detection on ciphertext and auth tag, key
+  rotation, fingerprints, constant-time comparison
+- **policy** — the full permission matrix: read-only blocking writes, high risk always
+  prompting, unconnected integrations refused, alternative providers, mode parsing
+- **tools** — registry integrity (no duplicate names), required capability surface,
+  generated JSON Schema, server-side argument validation (bad JSON, missing fields), tool
+  selection budget, and that read-only mode never even offers a mutation
+- **knowledge** — chunk sizing/overlap/ordering, HTML stripping, content hashing, and that
+  re-indexing an unchanged document skips embedding spend while staying user-scoped
+- **scheduler** — job-key identity per reminder occurrence, enqueue idempotency (including a
+  lost race on the unique index), reconciliation, digest timing
+- **models** — capability inference, fallback on a rate-limited provider, refusal to hand a
+  tool-calling request to an embedding model, and rethrowing genuine request errors
+
+Retrieval quality and RLS isolation are enforced in SQL, so verifying them needs a live
+Supabase instance:
+
+```sql
+-- as user A (anon key + A's JWT): must return 0 rows from user B
+select count(*) from knowledge_chunks where user_id <> auth.uid();
+```
+
+---
+
+## 5. Architecture
+
+```
+src/
+  app/                 routes: (app) shell, api/*, auth, login
+  components/          SparkOrb, Chat, AppShell, ui primitives
+  hooks/               useVoice, useAsyncEffect
+  lib/
+    agent/             prompt, context assembly, the execution loop
+    ai/                provider abstraction, model manager, embeddings, usage metering
+    crypto/            AES-256-GCM sealing for stored credentials
+    integrations/      wordpress, youtube, gmail, resend, search, connection store
+    knowledge/         chunking + ingest/search pipeline (pgvector, hybrid RRF)
+    memory/            long-term memory read/write/retrieval
+    permissions/       the policy engine
+    scheduler/         queue helpers + sweeper/runner
+    tools/             registry, selection, definitions/*
+supabase/migrations/   versioned schema, functions, RLS
+tests/                 vitest suites + fakes
+```
+
+### The agent loop
+
+1. **Assemble context** — profile, preferences, relevant memories, retrieved knowledge with
+   citations, connection status.
+2. **Select tools** — core tools plus intent-matched tools, capped by a budget. Everything
+   else is *deferred*, advertised by name so the model can request it.
+3. **Call the model** — with capability checks; if the model cannot do tools/JSON/vision the
+   call is routed to one that can.
+4. **Validate every tool call** — unknown tool, bad JSON, or schema mismatch is rejected
+   server-side and recorded.
+5. **Decide permission** — the policy engine, not the model, decides whether it runs, needs a
+   preview + approval, or is refused.
+6. **Execute and verify** — handlers confirm the effect against the provider (a created post
+   is re-fetched) before reporting success; `verified` is recorded separately from `ok`.
+7. **Log** — `execution_logs` and `action_logs` keep the real arguments, result and status.
+
+### Safety properties
+
+- The model never sees `SUPABASE_SERVICE_ROLE_KEY`-backed data it should not.
+- Untrusted content (web pages, email, documents) is inserted as *data* with provenance
+  markers, never as instructions.
+- Idempotency keys make duplicate scheduling and retried actions no-ops.
+- High-risk actions require a preview built from real data, plus an explicit approval before
+  execution.
+
+---
+
+## 6. Deployment (Vercel)
+
+1. Push the repository and import it in Vercel.
+2. Add the environment variables from §3 (Production and Preview).
+3. Add `CRON_SECRET`; `vercel.json` already declares the cron jobs.
+4. Deploy. Then verify:
+   - `GET /api/health` lists the configured capabilities
+   - sign-in → `/dashboard` renders the spark and readouts
+   - connect an integration from `/connections`
+   - create a reminder and watch `/api/cron/reminders` deliver it
+
+`maxDuration` is set on the agent and cron routes; the scheduler is designed so a single
+invocation drains work in bounded batches rather than assuming an open connection.
+
+---
+
+## 7. Troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| "JARVIS is not configured yet" | `NEXT_PUBLIC_SUPABASE_URL` / `ANON_KEY` are missing; nothing else loads until they exist |
+| Every tool returns "not connected" | Expected until you authorise the provider in Settings → Connections |
+| Knowledge search returns nothing | No `OPENAI_API_KEY` (keyword-only mode is weaker) or the document is still `indexing`/`failed` — check its status in Knowledge |
+| Reminders do not fire | `CRON_SECRET` missing on Vercel, or cron is disabled on the plan; the open-tab heartbeat is a supplement, not a replacement |
+| OAuth callback error | The redirect URI must be exactly `${NEXT_PUBLIC_APP_URL}/api/oauth/google/callback`, including scheme |
+| `Unrecognised secret envelope format` | `SECRET_ENCRYPTION_KEY` changed after credentials were stored; reconnect the integration |
+| Model answers "I cannot do that" for a tool that exists | The tool was not selected for this request — ask JARVIS to load it, or rephrase with the provider name |
+
+---
+
+## 8. Design
+
+Black field, one amber emitter: the spark (`src/components/SparkOrb.tsx`) is the interface,
+and everything else is a thin readout around it. Motion is limited to the orb's own
+breathing, one status pulse and the voice waveform, and all of it stops under
+`prefers-reduced-motion`. The orb pauses when the tab is hidden or scrolled out of view.

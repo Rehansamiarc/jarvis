@@ -1,26 +1,330 @@
 @import "tailwindcss";
 
+/*
+  JARVIS design language: a true-black field, one amber plasma light, and almost no chrome.
+  The spark is the interface; everything else is thin type floating in the dark. Colour is
+  used only where it means something — amber for JARVIS itself, warmer red for danger.
+  Motion is restrained (one pulse, one waveform, one breathing orb) and disabled under
+  prefers-reduced-motion.
+*/
+
+@theme {
+  --color-void: #000000;
+  --color-panel: #070605;
+  --color-panel2: #0d0a07;
+  --color-line: #1a1410;
+  --color-line2: #2b211a;
+  --color-arc: #ff9a3c;
+  --color-arc-dim: #7d4415;
+  --color-gold: #ffd08a;
+  --color-danger: #ff6b5c;
+  --color-ok: #8fdca0;
+  --color-ink: #f7ede2;
+  --color-mute: #a89583;
+  --color-faint: #6d5b4c;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #000;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* A single faint amber wash from above — the room light, not a texture. */
+  background-image: radial-gradient(1200px 620px at 50% -18%, rgba(255, 138, 40, 0.08), transparent 62%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(255, 154, 60, 0.3);
+}
+
+/* Thin, dark scrollbars so panels keep their edge. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line2);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------ primitives */
+
+.panel {
+  background: linear-gradient(180deg, rgba(13, 10, 8, 0.86), rgba(5, 4, 3, 0.9));
+  border: 1px solid rgba(255, 154, 60, 0.12);
+  border-radius: 16px;
+  backdrop-filter: blur(14px);
+}
+
+.panel-glow {
+  box-shadow: 0 0 0 1px rgba(255, 154, 60, 0.16), 0 18px 60px -30px rgba(255, 138, 40, 0.55);
+}
+
+/* Frosted card the way macOS asks for permission — the approval checkpoint. */
+.prompt-card {
+  background: rgba(18, 16, 14, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  box-shadow:
+    0 24px 70px -20px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(255, 154, 60, 0.12),
+    0 0 90px -30px rgba(255, 138, 40, 0.7);
+  backdrop-filter: blur(22px) saturate(120%);
+}
+
+.hairline {
+  border-color: var(--color-line);
+}
+
+.label {
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  font-weight: 500;
+}
+
+/* Top-of-screen tab strip: tiny, wide-tracked, amber only when active. */
+.tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.tab {
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--color-mute);
+  transition: color 140ms ease, background-color 140ms ease, text-shadow 140ms ease;
+  white-space: nowrap;
+}
+.tab:hover {
+  color: var(--color-ink);
+  background: rgba(255, 154, 60, 0.08);
+}
+.tab-active {
+  color: var(--color-gold);
+  background: rgba(255, 154, 60, 0.12);
+  text-shadow: 0 0 18px rgba(255, 154, 60, 0.75);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 10px;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: linear-gradient(180deg, #ffb05e, #ff8a2b);
+  color: #170c02;
+  box-shadow: 0 10px 30px -14px rgba(255, 138, 40, 0.9);
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffc37c, #ff9a3c);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: var(--color-line2);
+  color: var(--color-ink);
+}
+.btn-ghost:hover:not(:disabled) {
+  border-color: var(--color-arc-dim);
+  background: rgba(255, 154, 60, 0.09);
+  color: #fff;
+}
+.btn-danger {
+  background: rgba(255, 92, 122, 0.14);
+  border-color: rgba(255, 92, 122, 0.4);
+  color: #ffb9c6;
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(255, 92, 122, 0.24);
+}
+
+.input {
+  width: 100%;
+  background: rgba(8, 7, 6, 0.75);
+  border: 1px solid var(--color-line2);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.9rem;
+  color: var(--color-ink);
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.input:focus {
+  border-color: var(--color-arc-dim);
+  box-shadow: 0 0 0 3px rgba(255, 154, 60, 0.14);
+}
+.input::placeholder {
+  color: var(--color-faint);
+}
+
+textarea.input {
+  resize: vertical;
+  line-height: 1.55;
+}
+
+/* -------------------------------------------------------------------- motion */
+
+@keyframes arc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(255, 154, 60, 0.5);
+  }
+  50% {
+    opacity: 0.72;
+    box-shadow: 0 0 0 6px rgba(255, 154, 60, 0);
+  }
+}
+.status-pulse {
+  animation: arc-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes bar {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.wave-bar {
+  transform-origin: center;
+  animation: bar 900ms ease-in-out infinite;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.enter {
+  animation: fade-in-up 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ---------------------------------------------------------------- prose bits */
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  font-weight: 700;
+  margin: 1.1rem 0 0.45rem;
+  color: #fff;
+}
+.markdown h1 {
+  font-size: 1.2rem;
+}
+.markdown h2 {
+  font-size: 1.05rem;
+}
+.markdown h3 {
+  font-size: 0.95rem;
+}
+.markdown p {
+  margin: 0.55rem 0;
+  line-height: 1.65;
+}
+.markdown ul,
+.markdown ol {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown li {
+  margin: 0.22rem 0;
+  line-height: 1.55;
+}
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: rgba(255, 154, 60, 0.1);
+  border: 1px solid rgba(255, 154, 60, 0.2);
+  border-radius: 5px;
+  padding: 0.08rem 0.32rem;
+}
+.markdown pre {
+  background: rgba(6, 5, 4, 0.9);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  padding: 0.8rem 0.95rem;
+  overflow-x: auto;
+  margin: 0.7rem 0;
+}
+.markdown pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+.markdown a {
+  color: var(--color-arc);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown strong {
+  color: #fff;
+  font-weight: 650;
+}
+.markdown blockquote {
+  border-left: 2px solid var(--color-arc-dim);
+  padding-left: 0.85rem;
+  color: var(--color-mute);
+  margin: 0.7rem 0;
 }
