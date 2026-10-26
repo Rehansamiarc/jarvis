@@ -97,9 +97,21 @@ single source of truth for "what works right now".
 
 Cron is declared in `vercel.json`:
 
-- `/api/cron/reminders` — every minute (reminder delivery)
-- `/api/cron/jobs` — every 5 minutes (automations, digests, re-indexing)
-- `/api/cron/digest` — daily briefing
+- `/api/cron/reminders` — `0 6 * * *` (drains everything due since the last sweep)
+- `/api/cron/jobs` — `0 6 * * *` (automations, digests, re-indexing)
+- `/api/cron/digest` — `0 13 * * *` (daily briefing)
+
+**Reminder latency is bounded by the cron cadence.** Vercel's Hobby plan only permits
+once-a-day cron, so a reminder scheduled for the evening is delivered at the next sweep —
+up to 24h late. Nothing is lost (jobs are durable and claimed by `run_at <= now`), but if
+you want minute-level delivery choose one:
+
+1. **Vercel Pro** — change the two schedules in `vercel.json` to `* * * * *`.
+2. **External pinger** (free, no plan change) — point cron-job.org or similar at
+   `https://<your-app>/api/cron/reminders` every minute with header
+   `Authorization: Bearer $CRON_SECRET`, and set the same secret in that service.
+3. **Open tab heartbeat** — `/api/sweep` runs from the dashboard every 60s while JARVIS is
+   open. This is a supplement only; it never replaces cron.
 
 ### Models (all optional; sane defaults apply)
 
