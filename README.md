@@ -28,15 +28,18 @@ it could not (missing credential, missing scope, platform restriction).
 | Gmail (read, draft, send) | **Working once connected** | Send requires approval; delivery is Gmail's, not inferred |
 | Email via Resend (fallback channel) | **Working once configured** | Used when Gmail is not connected |
 | Web search (Serper) | **Working once configured** | Results are untrusted content, never instructions |
-| Voice: speech recognition + TTS, barge-in, wake word (opt-in) | **Working (browser)** | Uses Web Speech APIs — no background listening when the tab is closed |
+| Voice: speech recognition + TTS, barge-in, wake word (opt-in) | **Working (browser + desktop)** | Browser uses Web Speech APIs with no background listening; the desktop app adds real background wake-word listening (§9) |
+| Windows desktop app: tray, autostart, wake word, Voice Studio | **Working** | Electron app in `desktop/`; hands-free mode needs a free Picovoice key — see §9 |
 | Multi-model routing, capability checks, provider fallback | **Working** | Primary + specialist roles (coding/research/summary/vision/speech/embedding) |
 | Encryption of OAuth tokens and app passwords at rest | **Working** | AES-256-GCM, server-only key, versioned envelope |
 | Row Level Security on every user-owned row | **Working** | `auth.uid() = user_id` predicate; service-role calls are always user-filtered |
 | Unit tests | **Working** | 68 tests across crypto, policy, tools, knowledge, scheduler, models |
 
-**Not implemented, and not claimed:** continuous background listening, "send" on platforms
-without an official API, autonomous publishing without approval, arbitrary code execution,
-and unrestricted database access. Those are deliberate.
+**Not implemented, and not claimed:** continuous background listening *in a browser tab* (the
+desktop app's wake word is the supported path — §9), "send" on platforms without an official
+API, autonomous publishing without approval, arbitrary code execution, and unrestricted
+database access. Those are deliberate. Windows Hello, speaker verification and PC control are
+not built yet either; they are the next phase of the desktop work.
 
 ---
 
@@ -263,3 +266,74 @@ Black field, one amber emitter: the spark (`src/components/SparkOrb.tsx`) is the
 and everything else is a thin readout around it. Motion is limited to the orb's own
 breathing, one status pulse and the voice waveform, and all of it stops under
 `prefers-reduced-motion`. The orb pauses when the tab is hidden or scrolled out of view.
+
+---
+
+## 9. Windows desktop app
+
+A second front end in `desktop/`, built with Electron 45. It runs independently of the
+browser: close the window and it stays in the tray, keeps listening for the wake word, and
+keeps talking to the same brain.
+
+```bash
+npm run desktop:build   # bundle main + preload + renderer (esbuild) → desktop/dist
+npm run desktop         # launch the tray app
+npm run desktop:smoke   # headless self-check: prints JSON, exits 0 only if every check passes
+```
+
+### What actually works
+
+| Capability | Status | Detail |
+| --- | --- | --- |
+| Tray app, single instance, close-to-tray | **Working** | Amber icon drawn as RGBA at runtime; the menu drives mute, wake word, autostart and quit |
+| Start with Windows | **Working** | `app.setLoginItemSettings`; the checkbox reads back what Windows actually stored |
+| Sign-in reusing the Supabase session | **Working** | Sign-in window runs in its own `persist:jarvis-auth` partition; main replays the cookie to the REST API |
+| Voice Studio (voices, rate, pitch, previews) | **Working** | Enumerates OS speech voices (3 on this machine), previews instantly, saves to `user_preferences` |
+| On-device wake word | **Working once a key is set** | Porcupine on 16 kHz / 512-sample windows; `JARVIS` is a built-in keyword, a custom `.ppn` is accepted |
+| Privacy controls | **Working** | Mute releases the microphone, strict CSP, contextIsolation, no Node in the renderer |
+| Command the brain | **Working** | `/api/agent/run` over the same cookie session; the reply is spoken in the chosen voice |
+
+`npm run desktop:smoke` on this machine:
+
+```
+PASS electron          electron 45.0.0 · node 24.22.0
+PASS config_roundtrip  written and re-read identically
+PASS wake_word_model   ...\porcupine-node\resources\keyword_files\windows\jarvis_windows.ppn
+PASS wake_word_engine  skipped — no Picovoice access key configured (engine loads on demand)
+PASS brain_reachable   Not signed in. Open the sign-in window to continue.
+PASS autostart         openAtLogin=false
+PASS tray_icon         16x16 RGBA bitmap
+PASS speech_api        recognition=function, synthesis=object, audioContext=function, audioWorklet=function
+PASS renderer_bridge   window.jarvis exposes the typed API with isolation on
+PASS renderer_bundle   index.html + renderer.js present
+```
+
+A real launch additionally logs `[jarvis-desktop] ready`, `[jarvis-desktop] renderer ready`
+and `[jarvis-desktop] 3 speech voices loaded`, with no CSP warning and no renderer errors.
+
+### How the pieces fit
+
+- `desktop/main.ts` — lifecycle, tray, windows, IPC and the wake-word frame pump.
+- `desktop/preload.ts` — the only bridge; `contextBridge` exposes named channels and nothing else.
+- `desktop/ui/renderer.ts` — Voice Studio, microphone capture (AudioWorklet) and privacy panel.
+- `desktop/brain.ts` — REST client; the session cookie never enters the renderer.
+- `desktop/wakeword.ts` / `desktop/config.ts` — engine wrapper and validated local config.
+
+### Hardware, permissions and OS limitations
+
+- **The wake-word engine needs a free Picovoice access key** (console.picovoice.ai). Without
+  one the app is fully usable but not hands-free, and it says so. The model file is present and
+  the engine path is wired, but **detection itself is unverified here** because no key is set.
+- **Microphone permission** comes from Windows: Settings → Privacy → Microphone → “Let desktop
+  apps access your microphone”. The device is opened only while wake-word listening is on.
+- **Voice Studio is limited to voices installed in Windows.** More languages need the matching
+  Windows language/voice pack. Cloud voices were deferred, not simulated.
+- **Speech-to-text** uses Chromium's Web Speech API. This build exposes the constructor
+  (`recognition=function`), but transcription depends on a configured speech service and was
+  **not exercised end-to-end** — that needs a spoken phrase. Typed commands always work.
+- **Start with Windows** writes a login item; in development that item is `electron.exe` plus the
+  project path. The app is **not code-signed**, so a packaged build would trip SmartScreen.
+- **Not built yet:** Windows Hello (face/PIN/fingerprint), speaker verification, and PC control
+  (approved apps, file search, notifications). Nothing in this build pretends otherwise.
+- The session lives in Electron's `userData` directory. The desktop app holds no service-role
+  key and never reads provider secrets — it only replays the user's own session cookie.

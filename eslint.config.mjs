@@ -12,6 +12,14 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated build artifacts — rewritten by `sites_prepare_next` / `next build`
+    // on every publish, so linting them reports noise that cannot be fixed here.
+    ".open-next/**",
+    ".wrangler/**",
+    "desktop/dist/**",
+    "freebuff-sites-build/**",
+    "freebuff.open-next.config.ts",
+    "freebuff.wrangler.jsonc",
   ]),
 ]);
 

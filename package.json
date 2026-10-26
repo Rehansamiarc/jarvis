@@ -2,9 +2,13 @@
   "name": "jarvis",
   "version": "0.1.0",
   "private": true,
+  "main": "desktop/dist/main.js",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
+    "desktop:build": "node scripts/desktop-build.mjs",
+    "desktop": "npm run desktop:build && electron .",
+    "desktop:smoke": "npm run desktop:build && electron . --smoke-test",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
@@ -15,6 +19,7 @@
     "db:gen": "supabase migration new"
   },
   "dependencies": {
+    "@picovoice/porcupine-node": "^4.0.2",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.118.0",
     "lucide-react": "^1.61.0",
@@ -27,16 +32,26 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@tailwindcss/turbopack": "^4",
+    "@opennextjs/cloudflare": "1.20.12",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/luxon": "^3.7.6",
     "@types/node": "^26.6.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^45.0.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "wrangler": "4.148.0"
+  },
+  "allowScripts": {
+    "workerd@1.20261006.1": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.28.1": true,
+    "unrs-resolver@1.12.2": true
   }
 }

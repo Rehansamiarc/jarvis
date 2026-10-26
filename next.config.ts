@@ -21,14 +21,9 @@ const nextConfig: NextConfig = {
   // The app is session-driven and renders per-user; static prerendering buys nothing here
   // and would fight the dynamic APIs used by auth guards.
   cacheComponents: false,
-  turbopack: {
-    rules: {
-      "*.css": {
-        loaders: ["@tailwindcss/turbopack"],
-        as: "*.css",
-      },
-    },
-  },
+  // CSS is compiled by PostCSS (postcss.config.mjs) rather than a Turbopack
+  // loader, so `next dev` and `next build --webpack` produce the same styles.
+
   async headers() {
     return [
       {

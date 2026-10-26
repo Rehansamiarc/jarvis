@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      Locked down to what this page actually needs: its own bundle, inline styles, and
+      the blob: module URL used by the wake-word AudioWorklet. The renderer talks to the
+      main process over IPC only, so it needs no network access at all.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' blob:; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>JARVIS Desktop</title>
+    <style>
+      :root {
+        --bg: #050505;
+        --panel: rgba(255, 255, 255, 0.035);
+        --line: rgba(255, 255, 255, 0.09);
+        --ink: #f4efe7;
+        --mute: #9a948c;
+        --arc: #ff9a3c;
+        --ok: #5ad39b;
+        --bad: #ff7a90;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px;
+        background: rgba(5, 5, 5, 0.92);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(8px);
+      }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mute); flex: none; }
+      .dot.on { background: var(--ok); box-shadow: 0 0 10px rgba(90, 211, 155, 0.7); }
+      .dot.live { background: var(--arc); box-shadow: 0 0 12px rgba(255, 154, 60, 0.9); animation: pulse 1.4s ease-in-out infinite; }
+      @keyframes pulse { 50% { opacity: 0.35; } }
+      h1 { font-size: 15px; letter-spacing: 0.22em; text-transform: uppercase; margin: 0; font-weight: 600; }
+      .spacer { flex: 1; }
+      .label {
+        font-size: 10.5px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--mute);
+        margin: 0 0 10px;
+      }
+      main {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 22px 20px 60px;
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px 16px 18px;
+      }
+      section.wide { grid-column: 1 / -1; }
+      h2 { font-size: 13px; letter-spacing: 0.08em; margin: 0 0 4px; }
+      p.hint { color: var(--mute); font-size: 12.5px; margin: 6px 0 12px; }
+      label.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; font-size: 13px; }
+      input[type="text"], input[type="password"], input[type="url"], select {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        color: var(--ink);
+        padding: 9px 11px;
+        font: inherit;
+        outline: none;
+      }
+      input:focus, select:focus { border-color: rgba(255, 154, 60, 0.6); }
+      input[type="range"] { width: 100%; accent-color: var(--arc); }
+      button {
+        font: inherit;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+        padding: 8px 14px;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      button:hover { border-color: rgba(255, 154, 60, 0.55); }
+      button.primary { background: rgba(255, 154, 60, 0.16); border-color: rgba(255, 154, 60, 0.55); color: #ffd0a4; }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+      .status {
+        font-size: 12.5px;
+        color: var(--mute);
+        border-left: 2px solid var(--line);
+        padding: 6px 0 6px 10px;
+        margin-top: 10px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .status.ok { border-color: var(--ok); color: #bfe9d5; }
+      .status.bad { border-color: var(--bad); color: #ffc4cd; }
+      .status.warn { border-color: var(--arc); color: #ffd7b3; }
+      .badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+        border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; color: var(--mute);
+      }
+      .badge.live { border-color: rgba(255, 154, 60, 0.6); color: var(--arc); }
+      .log {
+        font-family: ui-monospace, "Cascadia Mono", monospace;
+        font-size: 12.5px;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        max-height: 220px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .log .you { color: var(--arc); }
+      .log .jarvis { color: #cfe6ff; }
+      .meter { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--mute); }
+      .pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 11px; }
+      .pill.on { color: var(--arc); border-color: rgba(255, 154, 60, 0.5); }
+      code { font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 12px; color: #d8d2c8; }
+      .field { margin-bottom: 10px; }
+      .value { font-variant-numeric: tabular-nums; color: var(--arc); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="dot" id="connDot"></span>
+      <h1>JARVIS Desktop</h1>
+      <span class="badge" id="micBadge">mic idle</span>
+      <span class="badge" id="wakeBadge">wake word off</span>
+      <span class="spacer"></span>
+      <button id="muteBtn" type="button">Mute</button>
+      <button id="openBrainBtn" type="button">Open brain in browser</button>
+    </header>
+
+    <main>
+      <!-- ------------------------------------------------------------ brain -->
+      <section>
+        <p class="label">Brain</p>
+        <div class="field">
+          <input id="brainUrl" type="url" placeholder="https://your-brain.example" spellcheck="false" />
+        </div>
+        <div class="btnrow" style="margin-top: 0">
+          <button id="saveBrainBtn" type="button">Save address</button>
+          <button id="signInBtn" class="primary" type="button">Sign in</button>
+          <button id="signOutBtn" type="button">Sign out</button>
+        </div>
+        <div class="status" id="sessionStatus">Checking…</div>
+      </section>
+
+      <!-- -------------------------------------------------------- voice studio -->
+      <section>
+        <p class="label">Voice Studio</p>
+        <div class="field">
+          <select id="voiceSelect"></select>
+        </div>
+        <div class="field">
+          <label class="row" for="rateRange">Rate <span class="value" id="rateValue">1.00×</span></label>
+          <input id="rateRange" type="range" min="0.5" max="2" step="0.05" value="1" />
+        </div>
+        <div class="field">
+          <label class="row" for="pitchRange">Pitch <span class="value" id="pitchValue">1.00</span></label>
+          <input id="pitchRange" type="range" min="0.5" max="2" step="0.05" value="1" />
+        </div>
+        <div class="btnrow">
+          <button id="previewBtn" type="button">Preview</button>
+          <button id="stopBtn" type="button">Stop</button>
+          <button id="saveVoiceBtn" class="primary" type="button">Save to JARVIS</button>
+        </div>
+        <div class="status" id="voiceStatus">Voices load from the Windows speech engine.</div>
+      </section>
+
+      <!-- --------------------------------------------------------- wake word -->
+      <section>
+        <p class="label">Wake word</p>
+        <p class="hint">
+          Detection runs on-device with Picovoice Porcupine. No audio is recorded or uploaded —
+          512-sample frames are matched against the phrase locally and discarded.
+        </p>
+        <label class="row">
+          Listen for “Hey JARVIS”
+          <input id="wakeToggle" type="checkbox" />
+        </label>
+        <div class="field">
+          <input id="accessKey" type="password" placeholder="Picovoice access key (stored on this PC only)" spellcheck="false" />
+        </div>
+        <div class="btnrow" style="margin-top: 0">
+          <button id="saveKeyBtn" type="button">Save key</button>
+          <button id="testMicBtn" type="button">Test microphone</button>
+        </div>
+        <div class="status" id="wakeStatus">Idle.</div>
+      </section>
+
+      <!-- ------------------------------------------------------------ privacy -->
+      <section>
+        <p class="label">Privacy</p>
+        <div class="meter" style="margin-bottom: 10px">
+          <span class="pill" id="micPill">microphone idle</span>
+          <span class="pill" id="camPill">camera unused</span>
+        </div>
+        <p class="hint">
+          Muting releases the microphone immediately and stops all frame processing. Ambient audio
+          is never uploaded, nothing is recorded to disk, and the camera is only touched by Windows
+          Hello — this app never opens it itself.
+        </p>
+        <div class="btnrow">
+          <button id="muteBtn2" type="button">Mute microphone</button>
+        </div>
+        <div class="status" id="privacyStatus">Microphone idle.</div>
+      </section>
+
+      <!-- ------------------------------------------------------------ command -->
+      <section class="wide">
+        <p class="label">Command the brain</p>
+        <div class="field">
+          <input id="commandInput" type="text" placeholder="Type an instruction, or say “Hey JARVIS” and speak it" />
+        </div>
+        <div class="btnrow" style="margin-top: 0">
+          <button id="sendBtn" class="primary" type="button">Run</button>
+          <button id="speakBtn" type="button">Speak reply aloud</button>
+          <span class="spacer"></span>
+          <span class="badge" id="sttBadge">voice input idle</span>
+        </div>
+        <div class="log" id="log"><span class="hint">Conversation with your JARVIS brain appears here.</span></div>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
