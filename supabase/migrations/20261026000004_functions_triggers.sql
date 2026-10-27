@@ -141,14 +141,22 @@ language sql
 security definer
 set search_path = public
 as $$
-  update public.scheduled_jobs
-     set status = 'scheduled',
-         claim_token = null,
-         lease_until = null,
-         updated_at = now()
-   where status in ('claimed','running')
-     and lease_until is not null
-     and lease_until < now();
+  -- A `language sql` function whose final statement is a bare UPDATE cannot be declared
+  -- `returns int` (Postgres 42P13 requires SELECT/RETURNING last). The CTE carries the
+  -- RETURNING clause, so the final statement is a SELECT and the count of released
+  -- leases is still returned for callers that log it.
+  with released as (
+    update public.scheduled_jobs
+       set status = 'scheduled',
+           claim_token = null,
+           lease_until = null,
+           updated_at = now()
+     where status in ('claimed','running')
+       and lease_until is not null
+       and lease_until < now()
+    returning 1
+  )
+  select count(*)::int from released;
 $$;
 
 grant execute on function public.release_stale_leases() to service_role;

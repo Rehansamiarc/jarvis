@@ -392,4 +392,8 @@ create table public.usage_logs (
 );
 
 create index usage_logs_user_idx on public.usage_logs (user_id, created_at desc);
-create index usage_logs_month_idx on public.usage_logs (user_id, date_trunc('month', created_at));
+-- Monthly rollup index. `date_trunc(text, timestamptz)` is only STABLE, so it cannot appear in
+-- a plain index expression (Postgres rejects it with 42P17). The three-argument overload that
+-- takes an explicit zone is IMMUTABLE, which makes this indexable; UTC keeps the bucketing
+-- deterministic regardless of the server TimeZone.
+create index usage_logs_month_idx on public.usage_logs (user_id, date_trunc('month', created_at, 'UTC'));
