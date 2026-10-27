@@ -97,13 +97,18 @@ const CAPABILITY_TABLE: Array<{
   match: RegExp;
   capabilities: Partial<ProviderCapabilities>;
 }> = [
+  // Embedding families come first: `gemini-embedding-001` would otherwise match the
+  // chat rule below and be reported as tool- and vision-capable.
+  {
+    match: /^(text-embedding-|embedding-|gemini-embedding|nomic-embed|mxbai-embed|all-minilm|bge-)/i,
+    capabilities: { tools: false, json: false, vision: false },
+  },
   { match: /^(gpt-5|o[34]|chatgpt-)/i, capabilities: { tools: true, json: true, vision: true } },
   { match: /^(gpt-4\.1|gpt-4o|gpt-4-turbo)/i, capabilities: { tools: true, json: true, vision: true } },
   { match: /^(gpt-3\.5|gpt-4(?:-|$|[^.o]))/i, capabilities: { tools: true, json: true, vision: false } },
   { match: /^(claude-)/i, capabilities: { tools: true, json: false, vision: true } },
   { match: /^(gemini-)/i, capabilities: { tools: true, json: true, vision: true } },
-  { match: /(llama|mistral|qwen|deepseek|codestral)/i, capabilities: { tools: true, json: false, vision: false } },
-  { match: /^(text-embedding-|embedding-)/i, capabilities: { tools: false, json: false, vision: false } },
+  { match: /(llama|mistral|qwen|deepseek|codestral|gemma)/i, capabilities: { tools: true, json: false, vision: false } },
 ];
 
 export function inferCapabilities(model: string): ProviderCapabilities {

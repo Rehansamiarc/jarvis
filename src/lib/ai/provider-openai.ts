@@ -9,7 +9,6 @@ import type {
   ToolSpec,
 } from "./types";
 import { inferCapabilities } from "./types";
-import { env, MissingEnvError } from "@/lib/env";
 
 /**
  * OpenAI-compatible provider implemented on `fetch`.
@@ -44,10 +43,20 @@ interface OpenAIProviderOptions {
   apiKey: string;
   baseUrl?: string;
   capabilities?: Partial<ProviderCapabilities>;
+  /** Identifier reported on the provider and used for usage logging. */
+  id?: string;
+  /**
+   * How to cap output length. Newer OpenAI models reject `max_tokens` in favour of
+   * `max_completion_tokens`; some vendors (Gemini's shim, Ollama) document neither,
+   * and an unrecognised parameter fails the whole request — so it can be disabled.
+   */
+  tokenParam?: "max_completion_tokens" | "none";
 }
 
 export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvider {
   const baseUrl = (options.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "");
+  const providerId = options.id ?? "openai";
+  const tokenParam = options.tokenParam ?? "max_completion_tokens";
   const capabilities: ProviderCapabilities = {
     tools: true,
     json: true,
@@ -104,7 +113,7 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
   }
 
   return {
-    id: "openai",
+    id: providerId,
     capabilities,
 
     async chat(request: ChatRequest): Promise<ChatResponse> {
@@ -129,9 +138,8 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
         payload.tool_choice = "auto";
       }
       if (request.temperature !== undefined) payload.temperature = request.temperature;
-      if (request.maxOutputTokens !== undefined) {
+      if (request.maxOutputTokens !== undefined && tokenParam !== "none") {
         // Newer reasoning models reject `max_tokens`; they want `max_completion_tokens`.
-        // Send both only when the model is not in the reasoning family.
         payload.max_completion_tokens = request.maxOutputTokens;
       }
       if (request.json && capabilities.json) {
@@ -215,16 +223,9 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
 }
 
 /**
- * Factory with capability fallback: if no API key is configured the returned provider
- * throws an actionable ProviderUnavailableError instead of crashing at import time,
- * so the UI can render "AI not configured" rather than a stack trace.
+ * Capability hints for a model name. Kept here so callers that only need "can this
+ * model call tools / see images" do not have to import the whole provider module.
  */
-export function defaultProvider(): ModelProvider {
-  const { OPENAI_API_KEY, OPENAI_BASE_URL } = env();
-  if (!OPENAI_API_KEY) throw new MissingEnvError(["OPENAI_API_KEY"], "AI reasoning");
-  return createOpenAIProvider({ apiKey: OPENAI_API_KEY, baseUrl: OPENAI_BASE_URL });
-}
-
 export function providerSupports(model: string): ProviderCapabilities {
   return inferCapabilities(model);
 }

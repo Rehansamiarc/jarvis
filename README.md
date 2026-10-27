@@ -20,7 +20,7 @@ it could not (missing credential, missing scope, platform restriction).
 | Permission engine (read / write / high risk + connection requirements) | **Working** | Independent of the model; approval gate cannot be widened by prompt injection |
 | Approval checkpoints for consequential actions | **Working** | Server-built preview of the exact payload; signed, expiring pending actions |
 | Persistent memory (searchable, editable, exportable, deletable) | **Working** | Separate from documents and from conversation history |
-| Knowledge base: ingest → chunk → embed → pgvector, hybrid search, citations | **Working** | Requires `OPENAI_API_KEY` for embeddings; degrades to keyword-only search without it |
+| Knowledge base: ingest → chunk → embed → pgvector, hybrid search, citations | **Working** | Requires any embedding provider (`GOOGLE_API_KEY` free, `OPENAI_API_KEY`, or local Ollama); degrades to keyword-only search without one |
 | Reminders, recurrence (RRULE), timezone handling, missed-run recovery | **Working** | Postgres-backed queue; delivery via cron, not the open browser tab |
 | Background jobs, digests, retries with exponential backoff, dead-letter | **Working** | Claim/complete functions in SQL, one sweeper endpoint |
 | WordPress (search, drafts, publish, comments, status) | **Working once connected** | Application password or OAuth; publish/delete always requires approval |
@@ -90,7 +90,25 @@ single source of truth for "what works right now".
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only; reads encrypted credentials, refreshes OAuth tokens. Never sent to the browser |
 | `SECRET_ENCRYPTION_KEY` | 32 bytes for AES-256-GCM. Base64/hex/passphrase all accepted |
 | `NEXT_PUBLIC_APP_URL` | Canonical origin, used for OAuth redirects and auth callbacks |
-| `OPENAI_API_KEY` | Model calls and embeddings |
+
+### Models (any one of these is enough — three are free, no credit card required)
+
+The server reads whichever keys it finds in `src/lib/ai/providers.ts` and automatically
+falls back when one is rate-limited or unavailable. **No paid key is needed to run
+JARVIS.**
+
+| Variable | Cost | Notes |
+| --- | --- | --- |
+| `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | **Free tier** | Gemini via Google's OpenAI-compatible shim for chat, native `embedContent` for 1536-d embeddings. Recommended default. Unpaid tier may use prompts to improve Google's models — route genuinely private work elsewhere if that matters |
+| `GROQ_API_KEY` | **Free** | Very fast tool-capable models, roughly 30 RPM / 1000 requests a day per model. **No embeddings endpoint**, so it is a chat fallback only |
+| `OLLAMA_BASE_URL` | **Free, local, private** | Set to `http://localhost:11434/v1` to opt in. Nothing leaves your machine. `ollama pull qwen3:8b` for chat (~8-12 GB RAM), `ollama pull nomic-embed-text` for the knowledge base (768-d: set `JARVIS_EMBEDDING_DIM=768` and widen the vector columns first) |
+| `OPENAI_API_KEY` | Paid, optional | Adding it brings OpenAI into the fallback chain with no code change |
+
+`JARVIS_MODEL_PRIMARY`, `JARVIS_MODEL_CODING`, `JARVIS_MODEL_RESEARCH`,
+`JARVIS_MODEL_SUMMARY`, `JARVIS_MODEL_VISION`, `JARVIS_MODEL_SPEECH`,
+`JARVIS_EMBEDDING_MODEL`, `JARVIS_EMBEDDING_DIM`, `OPENAI_BASE_URL`.
+
+Per-account overrides live in the `model_config` table and take precedence over env.
 
 ### Scheduling
 
@@ -114,17 +132,7 @@ you want minute-level delivery choose one:
    `https://<your-app>/api/cron/reminders` every minute with header
    `Authorization: Bearer $CRON_SECRET`, and set the same secret in that service.
 3. **Open tab heartbeat** — `/api/sweep` runs from the dashboard every 60s while JARVIS is
-   open. This is a supplement only; it never replaces cron.
-
-### Models (all optional; sane defaults apply)
-
-`JARVIS_MODEL_PRIMARY`, `JARVIS_MODEL_CODING`, `JARVIS_MODEL_RESEARCH`,
-`JARVIS_MODEL_SUMMARY`, `JARVIS_MODEL_VISION`, `JARVIS_MODEL_SPEECH`,
-`JARVIS_EMBEDDING_MODEL`, `JARVIS_EMBEDDING_DIM`, `OPENAI_BASE_URL`.
-
-Per-account overrides live in the `model_config` table and take precedence over env.
-
-### Integrations
+   open. This is a supplement only; it never replaces cron.### Integrations
 
 | Variable | Purpose |
 | --- | --- |
@@ -252,7 +260,7 @@ invocation drains work in bounded batches rather than assuming an open connectio
 | --- | --- |
 | "JARVIS is not configured yet" | `NEXT_PUBLIC_SUPABASE_URL` / `ANON_KEY` are missing; nothing else loads until they exist |
 | Every tool returns "not connected" | Expected until you authorise the provider in Settings → Connections |
-| Knowledge search returns nothing | No `OPENAI_API_KEY` (keyword-only mode is weaker) or the document is still `indexing`/`failed` — check its status in Knowledge |
+| Knowledge search returns nothing | No embedding provider configured (keyword-only mode is weaker) or the document is still `indexing`/`failed` — check its status in Knowledge |
 | Reminders do not fire | `CRON_SECRET` missing on Vercel, or cron is disabled on the plan; the open-tab heartbeat is a supplement, not a replacement |
 | OAuth callback error | The redirect URI must be exactly `${NEXT_PUBLIC_APP_URL}/api/oauth/google/callback`, including scheme |
 | `Unrecognised secret envelope format` | `SECRET_ENCRYPTION_KEY` changed after credentials were stored; reconnect the integration |

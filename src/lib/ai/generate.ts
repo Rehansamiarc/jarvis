@@ -28,12 +28,14 @@ export async function generateText(
 ): Promise<string> {
   const role = input.role ?? "primary";
 
+  let resolvedProvider = "unknown";
   const response = await withModelFallback(
     db,
     role,
     userId,
-    async (provider, model) =>
-      provider.chat({
+    async (provider, model) => {
+      resolvedProvider = provider.id;
+      return provider.chat({
         model: model.model,
         messages: [
           { role: "system", content: input.system },
@@ -43,12 +45,14 @@ export async function generateText(
         temperature: input.temperature ?? 0.7,
         maxOutputTokens: input.maxTokens ?? 1200,
         timeoutMs: input.timeoutMs ?? 45_000,
-      }),
+      });
+    },
     { needJson: input.json }
   );
 
   await logUsage(db, userId, {
-    provider: "openai",
+    // Log the vendor that actually served the request — it may be a free provider.
+    provider: resolvedProvider,
     model: response.model,
     operation: "chat",
     usage: response.usage,

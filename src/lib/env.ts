@@ -20,6 +20,15 @@ const EnvSchema = z.object({
 
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_BASE_URL: z.string().url().optional(),
+
+  // Free-tier model providers. Any one of these is enough to run JARVIS at zero cost.
+  // https://aistudio.google.com/apikey (Gemini free tier, also accepted as GEMINI_API_KEY)
+  GOOGLE_API_KEY: z.string().min(1).optional(),
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  // https://console.groq.com/keys (free developer plan)
+  GROQ_API_KEY: z.string().min(1).optional(),
+  // Local Ollama server. Set to enable it — it is never probed when unset.
+  OLLAMA_BASE_URL: z.string().url().optional(),
   JARVIS_MODEL_PRIMARY: z.string().min(1).optional(),
   JARVIS_MODEL_CODING: z.string().min(1).optional(),
   JARVIS_MODEL_RESEARCH: z.string().min(1).optional(),
@@ -44,6 +53,24 @@ const EnvSchema = z.object({
 
 export type Env = z.infer<typeof EnvSchema>;
 
+/**
+ * Normalise a Supabase project URL.
+ *
+ * The dashboard puts the project URL and the REST endpoint side by side, and copying
+ * the REST one (`https://<ref>.supabase.co/rest/v1/`) is an easy mistake with a silent,
+ * total effect: supabase-js appends its own `/rest/v1` and `/auth/v1` segments, so every
+ * call becomes `/rest/v1/rest/v1/...` and answers `404 PGRST125 Invalid path specified`,
+ * while the health endpoint still reports Supabase as configured. Strip exactly the
+ * API suffix and keep anything else — a self-hosted project may legitimately live under
+ * a subpath.
+ */
+export function normalizeSupabaseUrl(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/(rest|auth)\/v1$/i, "");
+}
+
 let cached: Env | null = null;
 
 /** Drop the memoised snapshot. Used by tests that vary the environment per case. */
@@ -53,13 +80,45 @@ export function resetEnvCache(): void {
 
 export function env(): Env {
   if (cached) return cached;
-  const parsed = EnvSchema.safeParse(process.env);
-  // Never throw at import time — an incomplete env should degrade the specific feature,
-  // not prevent the application from booting or building.
-  cached = parsed.success ? parsed.data : ({} as Env);
-  if (!parsed.success) {
-    console.warn("[jarvis] some environment variables failed validation", parsed.error.issues);
+
+  const shape = EnvSchema.shape;
+  const result: Record<string, unknown> = {};
+  const issues: string[] = [];
+
+  // Parse field by field, and treat an empty value as unset. Anything else silently
+  // disabled *every* feature: one blank optional variable (RESEND_FROM="") failed the
+  // whole-object parse, and `env()` fell back to an empty object — so a harmless
+  // setting turned off AI, Supabase and OAuth together.
+  for (const [key, value] of Object.entries(process.env)) {
+    const field = shape[key as keyof typeof shape];
+    if (!field || value === undefined) continue;
+    if (value.trim() === "") continue;
+
+    const parsed = field.safeParse(value);
+    if (parsed.success) result[key] = parsed.data;
+    else issues.push(`${key}: ${parsed.error.issues[0]?.message ?? "invalid"}`);
   }
+
+  if (issues.length) {
+    // Never throw at import time — an incomplete env should degrade the specific
+    // feature, not prevent the application from booting or building.
+    console.warn(`[jarvis] ignoring invalid environment variables: ${issues.join("; ")}`);
+  }
+
+  const configuredUrl = result.NEXT_PUBLIC_SUPABASE_URL as string | undefined;
+  if (configuredUrl) {
+    const normalized = normalizeSupabaseUrl(configuredUrl);
+    if (normalized !== configuredUrl) {
+      result.NEXT_PUBLIC_SUPABASE_URL = normalized;
+      console.warn(
+        `[jarvis] NEXT_PUBLIC_SUPABASE_URL pointed at the REST endpoint ` +
+          `("${configuredUrl}"); using "${normalized}" instead. Copy the project URL ` +
+          `from Project Settings → API, not the REST endpoint.`
+      );
+    }
+  }
+
+  cached = result as Env;
   return cached;
 }
 
@@ -94,7 +153,9 @@ export function requireEnv<K extends keyof Env>(...keys: K[]): Pick<Env, K> {
 /** Feature-detection helpers so the UI can truthfully show what is and isn't connected. */
 export const availability = () => ({
   supabase: Boolean(env().NEXT_PUBLIC_SUPABASE_URL && env().NEXT_PUBLIC_SUPABASE_ANON_KEY),
-  ai: Boolean(env().OPENAI_API_KEY),
+  // Any reachable model provider counts as "AI configured" — including the free tiers
+  // and a local Ollama server, which need no paid key at all.
+  ai: Boolean(env().OPENAI_API_KEY || env().GOOGLE_API_KEY || env().GEMINI_API_KEY || env().GROQ_API_KEY || env().OLLAMA_BASE_URL),
   google: Boolean(env().GOOGLE_CLIENT_ID && env().GOOGLE_CLIENT_SECRET),
   wordpressStatic:
     Boolean(env().WORDPRESS_SITE_URL && env().WORDPRESS_USERNAME && env().WORDPRESS_APP_PASSWORD),

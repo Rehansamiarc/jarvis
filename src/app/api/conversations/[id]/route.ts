@@ -1,6 +1,6 @@
 import { requireAuth, jsonError, jsonOk, readJson, ApiError } from "@/lib/api";
 import { summarize } from "@/lib/ai/generate";
-import { env } from "@/lib/env";
+import { availability } from "@/lib/env";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -73,7 +73,7 @@ export async function PATCH(
       patch.archived_at = parsed.data.archive ? new Date().toISOString() : null;
 
     if (parsed.data.summarize) {
-      if (!env().OPENAI_API_KEY) throw new ApiError("AI is not configured.", 503, "not_configured");
+      if (!availability().ai) throw new ApiError("AI is not configured.", 503, "not_configured");
 
       const { data: rows } = await auth.db
         .from("messages")

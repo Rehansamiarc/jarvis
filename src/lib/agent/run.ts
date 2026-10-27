@@ -188,13 +188,15 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     }
 
     let response;
+    let resolvedProvider = "unknown";
     try {
       response = await withModelFallback(
         input.db,
         "primary",
         input.userId,
-        async (provider, model) =>
-          provider.chat({
+        async (provider, model) => {
+          resolvedProvider = provider.id;
+          return provider.chat({
             model: model.model,
             messages,
             tools: specFor(),
@@ -202,7 +204,8 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
             maxOutputTokens: 1600,
             timeoutMs: 60_000,
             signal: input.signal,
-          }),
+          });
+        },
         { needTools: true, timeoutMs: 60_000 }
       );
     } catch (error) {
@@ -213,7 +216,9 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     }
 
     await logUsage(input.db, input.userId, {
-      provider: "openai",
+      // The model that answered may be a free provider, so log the vendor that actually
+      // served the request rather than assuming OpenAI.
+      provider: resolvedProvider,
       model: response.model,
       operation: "chat",
       usage: response.usage,

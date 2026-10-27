@@ -34,6 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# supabase CLI scratch state (link metadata, pooler URL) — never commit
+/supabase/.temp/
+
 # vercel
 .vercel
 

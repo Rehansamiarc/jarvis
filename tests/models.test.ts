@@ -5,6 +5,7 @@ import {
   ProviderError,
   withModelFallback,
 } from "@/lib/ai/model-manager";
+import { envCandidatesFor } from "@/lib/ai/providers";
 import { resetEnvCache } from "@/lib/env";
 
 const ROWS = [
@@ -119,5 +120,62 @@ describe("fallback handling", () => {
     await expect(
       withModelFallback(configClient(), "primary", null, async (_p, model) => model.model)
     ).rejects.toThrow(/OPENAI_API_KEY/);
+  });
+
+  it("falls through when the provider does not hold the selected model", async () => {
+    const tried: string[] = [];
+    const result = await withModelFallback(configClient(), "coding", null, async (_provider, model) => {
+      tried.push(model.model);
+      if (tried.length === 1) {
+        // Exactly what Ollama answers for a model that was never pulled.
+        throw new ProviderError(
+          'Model "gpt-5" returned HTTP 404: {"error":{"message":"model gpt-5 not found, try pulling it first","code":"model_not_found"}}',
+          404,
+          false,
+          model.model
+        );
+      }
+      return `answered by ${model.model}`;
+    });
+
+    expect(tried).toEqual(["gpt-5", "gpt-5-mini"]);
+    expect(result).toBe("answered by gpt-5-mini");
+  });
+});
+
+describe("local provider candidates", () => {
+  beforeEach(() => {
+    // A machine with nothing but Ollama: no cloud key at all.
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GROQ_API_KEY;
+    process.env.OLLAMA_BASE_URL = "http://localhost:11434/v1";
+    resetEnvCache();
+  });
+
+  it("offers other local models when the role default was not pulled", () => {
+    const models = envCandidatesFor("primary").map((c) => c.model);
+
+    expect(models[0]).toBe("qwen3:8b");
+    // The model installed on this machine, offered as a fallback rather than a
+    // hard failure when qwen3:8b is absent.
+    expect(models).toContain("qwen2.5-coder:7b");
+  });
+
+  it("never offers a chat model for the embedding role", () => {
+    expect(envCandidatesFor("embedding")).toEqual([
+      { provider: "ollama", model: "nomic-embed-text" },
+    ]);
+  });
+
+  it("keeps a hosted provider to one candidate per role", () => {
+    delete process.env.OLLAMA_BASE_URL;
+    process.env.OPENAI_API_KEY = "sk-test-not-a-real-key";
+    resetEnvCache();
+
+    expect(envCandidatesFor("primary")).toEqual([
+      { provider: "openai", model: "gpt-5-mini" },
+    ]);
   });
 });

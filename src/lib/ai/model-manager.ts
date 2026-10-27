@@ -2,6 +2,14 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env, type Env } from "@/lib/env";
 import { createOpenAIProvider, ProviderError, ProviderUnavailableError } from "./provider-openai";
+import { createGoogleProvider } from "./provider-google";
+import { createOllamaProvider } from "./provider-ollama";
+import {
+  envCandidatesFor,
+  getProvider,
+  providerCredentials,
+  type ProviderId,
+} from "./providers";
 import type { ModelProvider, ModelRole, ResolvedModel } from "./types";
 import { inferCapabilities } from "./types";
 
@@ -110,10 +118,12 @@ export async function resolveModelChain(
   const candidates: ResolvedModelFull[] = [];
   const seen = new Set<string>();
 
-  const push = (row: (ConfigRow & { role?: string }) | undefined, fallbackRole: ModelRole) => {
-    const model = row?.model || ENV_MODEL[fallbackRole](e) || BUILT_IN_DEFAULT[fallbackRole];
-    const provider = row?.provider ?? "openai";
-    const baseUrl = row?.base_url ?? (fallbackRole === "embedding" ? undefined : e.OPENAI_BASE_URL);
+  const push = (candidate: RowCandidate, fallbackRole: ModelRole) => {
+    const model =
+      candidate.model || ENV_MODEL[fallbackRole](e) || BUILT_IN_DEFAULT[fallbackRole];
+    const provider = inferProvider(model, candidate.provider);
+    const baseUrl =
+      candidate.baseUrl ?? (fallbackRole === "embedding" ? undefined : e.OPENAI_BASE_URL);
     const key = `${provider}:${model}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -123,24 +133,40 @@ export async function resolveModelChain(
       baseUrl,
       role: fallbackRole,
       capabilities: inferCapabilities(model),
-      maxOutputTokens: row?.max_output_tokens ?? undefined,
-      temperature: row?.temperature ?? undefined,
+      maxOutputTokens: candidate.maxOutputTokens,
+      temperature: candidate.temperature,
     });
   };
 
+  const fromRow = (row: ConfigRow | undefined): RowCandidate => ({
+    provider: row?.provider,
+    model: row?.model,
+    baseUrl: row?.base_url ?? undefined,
+    maxOutputTokens: row?.max_output_tokens ?? undefined,
+    temperature: row?.temperature ?? undefined,
+  });
+
   const userRow = byRole(userRows, role);
   const globalRow = byRole(globalRows, role);
-  push(userRow ?? globalRow, role);
+  push(fromRow(userRow ?? globalRow), role);
 
   // Fallbacks: other rows for this role (by fallback_order), then the primary model.
   if (role !== "primary") {
     const fallbacks = [...userRows, ...globalRows]
       .filter((r) => (r as { role?: string }).role === "primary")
       .sort((a, b) => a.fallback_order - b.fallback_order);
-    for (const row of fallbacks) push(row, "primary");
+    for (const row of fallbacks) push(fromRow(row), "primary");
   }
 
-  if (candidates.length === 0) push(undefined, "primary");
+  // Environment-configured providers (free tiers, local Ollama) are always appended so
+  // a key you actually hold stays reachable even when the database rows point at a
+  // vendor you have not configured — a row for OpenAI with no OPENAI_API_KEY set must
+  // not dead-end the request when a free Gemini key exists.
+  for (const candidate of envCandidatesFor(role, e)) {
+    push({ provider: candidate.provider, model: candidate.model }, role);
+  }
+
+  if (candidates.length === 0) push(fromRow(undefined), "primary");
   return candidates;
 }
 
@@ -213,7 +239,17 @@ export async function withModelFallback<T>(
       const isTransient = error instanceof ProviderError && error.retryable;
       const isUnavailable = error instanceof ProviderUnavailableError;
 
-      if ((isTransient || isUnavailable || looksLikeCapability) && chain.length > 1) {
+      // A provider that does not have the selected model is a candidate-level problem,
+      // not a request-level one: the next candidate can still answer. Verified against
+      // Ollama, which answers 404 for a model that was never pulled, and against
+      // OpenAI-compatible vendors, which answer 404 with "model does not exist".
+      const missingModel =
+        (error instanceof ProviderError && error.status === 404) ||
+        /model_not_found|not_found_error|no such model|\bmodel\b[^.]{0,200}?\b(not found|does not exist)\b/i.test(
+          message
+        );
+
+      if ((isTransient || isUnavailable || looksLikeCapability || missingModel) && chain.length > 1) {
         errors.push(`${candidate.model}: ${message}`);
         continue;
       }
@@ -226,22 +262,68 @@ export async function withModelFallback<T>(
   );
 }
 
+interface RowCandidate {
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  maxOutputTokens?: number;
+  temperature?: number;
+}
+
+/**
+ * Work out which vendor owns a model name.
+ *
+ * Rows carry a provider column, but the environment overrides and the built-in
+ * defaults do not, so a model like `gemini-3.8-flash` must not be sent to OpenAI's
+ * endpoint just because the row defaulted to "openai". Only unambiguous families are
+ * inferred; anything else keeps the configured provider.
+ */
+function inferProvider(model: string, explicit: string | undefined): string {
+  if (explicit && explicit !== "openai") return explicit;
+  if (/^gemini-/i.test(model)) return "google";
+  if (/(?:^|\/)gpt-oss-|^qwen\//i.test(model)) return "groq";
+  // Ollama tags its local models with a colon: qwen3:8b, llama3.1:8b, nomic-embed-text.
+  if (/^[a-z0-9._-]+:[a-z0-9._-]+$/i.test(model)) return "ollama";
+  return explicit ?? "openai";
+}
+
 function buildProvider(model: ResolvedModelFull): ModelProvider {
   const e = env();
-  if (!e.OPENAI_API_KEY) throw new MissingKeyError();
-  if (model.provider !== "openai") {
-    throw new Error(`Provider "${model.provider}" is not implemented — supported: openai-compatible`);
+  const preset = getProvider(model.provider);
+  const { key, missingVar } = providerCredentials(preset.id as ProviderId, e);
+  if (!key) {
+    throw new MissingKeyError(missingVar!, preset.label);
   }
-  return createOpenAIProvider({
-    apiKey: e.OPENAI_API_KEY,
-    baseUrl: model.baseUrl ?? e.OPENAI_BASE_URL,
-    capabilities: model.capabilities,
-  });
+
+  switch (preset.id) {
+    case "google":
+      return createGoogleProvider({
+        apiKey: key,
+        baseUrl: model.baseUrl ?? preset.baseUrl(e),
+        capabilities: model.capabilities,
+      });
+    case "ollama":
+      return createOllamaProvider({
+        baseUrl: model.baseUrl ?? preset.baseUrl(e),
+        capabilities: model.capabilities,
+      });
+    default:
+      return createOpenAIProvider({
+        id: preset.id,
+        apiKey: key,
+        baseUrl: model.baseUrl ?? preset.baseUrl(e),
+        capabilities: model.capabilities,
+        tokenParam: preset.tokenParam,
+      });
+  }
 }
 
 class MissingKeyError extends Error {
-  constructor() {
-    super("OPENAI_API_KEY is not configured");
+  constructor(variable: string, label: string) {
+    super(
+      `${variable} is not configured — set it in .env.local (or Vercel → Settings → ` +
+        `Environment Variables) to use ${label}. See .env.example for every free option.`
+    );
     this.name = "MissingKeyError";
   }
 }
