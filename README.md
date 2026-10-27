@@ -72,6 +72,13 @@ Migrations live in `supabase/migrations` and must be applied in order:
 5. `..._rls_policies.sql` — Row Level Security for every table
 6. `..._seed_registry.sql` — platform model defaults and tool metadata
 7. `..._scheduler_functions.sql` — job claim/complete with backoff and dead-lettering
+8. `..._free_provider_defaults.sql` — platform defaults on the free Gemini tier
+
+`supabase db push` needs write access to the database. A *scoped* access token without
+the `database_write` permission fails with `Missing required permission(s):
+database_write`; in that case set `SUPABASE_DB_PASSWORD` in `.env.local` and push with
+`npx supabase db push --linked --password "$SUPABASE_DB_PASSWORD"`. The SQL Editor in the
+Supabase dashboard accepts the same files in the same order if you prefer to paste them.
 
 ---
 
@@ -265,6 +272,10 @@ invocation drains work in bounded batches rather than assuming an open connectio
 | OAuth callback error | The redirect URI must be exactly `${NEXT_PUBLIC_APP_URL}/api/oauth/google/callback`, including scheme |
 | `Unrecognised secret envelope format` | `SECRET_ENCRYPTION_KEY` changed after credentials were stored; reconnect the integration |
 | Model answers "I cannot do that" for a tool that exists | The tool was not selected for this request — ask JARVIS to load it, or rephrase with the provider name |
+| `404 PGRST125 Invalid path specified` / `Could not find the table ... in the schema cache` | `NEXT_PUBLIC_SUPABASE_URL` points at the REST endpoint (`…/rest/v1/`). Paste the **project** URL. The app strips a REST/auth suffix and logs a warning, but fix the value so nothing bypasses that guard |
+| `Missing required permission(s): database_write` on `db:migrate` | The access token is scoped without write access — use a full-access token, or `--password` with `SUPABASE_DB_PASSWORD` |
+| Chat fails with `model "x" not found, try pulling it first` | The preferred local model is not downloaded. JARVIS falls through to another local default, but run `ollama pull <model>` to get the intended one |
+| `No available model satisfied this request` | No provider in the chain could serve it — check `/api/health`, then that at least one key or `OLLAMA_BASE_URL` is set |
 
 ---
 
