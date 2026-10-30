@@ -118,6 +118,12 @@ class ToolRegistry {
     return [...this.tools.keys()];
   }
 
+  /** Drops every registration. Used when a module is re-evaluated (dev HMR). */
+  clear(): this {
+    this.tools.clear();
+    return this;
+  }
+
   /** JSON Schema for the model. Generated from the same Zod schema that validates input. */
   spec(tool: AnyTool): ToolSpec {
     const json = toJSONSchema(tool.schema, { target: "draft-2020-12", io: "input" }) as Record<
@@ -168,4 +174,13 @@ class ToolRegistry {
   }
 }
 
-export const registry = new ToolRegistry();
+/**
+ * The registry is a process-wide singleton, but Next re-evaluates modules on a dev hot
+ * reload while the module graph keeps the old instance alive. Caching it on `globalThis`
+ * (plus the epoch check in `initTools`) keeps one registry and avoids
+ * "Duplicate tool registration" after an edit.
+ */
+const REGISTRY_KEY = Symbol.for("jarvis.toolRegistry");
+const globalStore = globalThis as typeof globalThis & { [REGISTRY_KEY]?: ToolRegistry };
+
+export const registry: ToolRegistry = (globalStore[REGISTRY_KEY] ??= new ToolRegistry());

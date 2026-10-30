@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { loadRuntimeContext } from "@/lib/agent/context";
-import { Badge, formatWhen, timeAgo } from "@/components/ui";
+import { Badge } from "@/components/ui";
+import { formatWhen, timeAgo } from "@/lib/format";
 import SparkOrb from "@/components/SparkOrb";
 import { availability } from "@/lib/env";
 

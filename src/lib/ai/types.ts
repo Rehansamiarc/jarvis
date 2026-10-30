@@ -12,6 +12,15 @@ export interface ToolCall {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+  /**
+   * Vendor metadata that must be echoed back verbatim on the follow-up turn.
+   *
+   * Gemini 3.x places a `thought_signature` here and rejects the next request with
+   * `Function call is missing a thought_signature in functionCall parts` (HTTP 400) if
+   * it is dropped — which is exactly what happens when a provider response is replayed
+   * as-is through a generic OpenAI-shaped transport.
+   */
+  extra_content?: Record<string, unknown>;
 }
 
 export interface ChatMessage {

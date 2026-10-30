@@ -10,7 +10,7 @@ import {
 import { createGoogleProvider } from "@/lib/ai/provider-google";
 import { createOllamaProvider, parseLegacyToolCall } from "@/lib/ai/provider-ollama";
 import { invalidateModelConfigCache, withModelFallback } from "@/lib/ai/model-manager";
-import { ProviderError } from "@/lib/ai/provider-openai";
+import { createOpenAIProvider, ProviderError } from "@/lib/ai/provider-openai";
 import { resetEnvCache } from "@/lib/env";
 
 const MANAGED_KEYS = [
@@ -372,5 +372,137 @@ describe("Gemini chat transport", () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.max_tokens).toBe(64);
     expect(body.max_completion_tokens).toBeUndefined();
+  });
+
+  it("sends tools in the OpenAI wire shape, not the internal ToolSpec", async () => {
+    // Regression: the raw `{name, description, parameters}` spec was put on the wire,
+    // which every endpoint rejects (Gemini: `Unknown name "name" at 'tools[0]'`). Tool
+    // calling was therefore broken for the whole agent loop.
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }),
+    });
+
+    const provider = createGoogleProvider({ apiKey: "g-free" });
+    await provider.chat({
+      model: "gemini-3.5-flash-lite",
+      messages: [{ role: "user", content: "search" }],
+      tools: [
+        {
+          name: "web_search",
+          description: "Search the web",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        },
+      ],
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)) as {
+      tools: Array<Record<string, unknown>>;
+      tool_choice: string;
+    };
+    expect(body.tool_choice).toBe("auto");
+    expect(body.tools[0]).toEqual({
+      type: "function",
+      function: {
+        name: "web_search",
+        description: "Search the web",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    });
+    // The unwrapped form must be gone: it is what the endpoint rejected.
+    expect(body.tools[0]).not.toHaveProperty("name");
+  });
+
+  it("replays Gemini's thought_signature and strips it for strict vendors", async () => {
+    // Regression: Gemini 3.x answers the follow-up turn with HTTP 400
+    // "Function call is missing a thought_signature in functionCall parts" unless the
+    // signature it issued is echoed back — so every tool-using turn failed after the
+    // tool had already run.
+    const toolCallResponse = {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "web_search", arguments: '{"query":"mars"}' },
+                  extra_content: { google: { thought_signature: "SIG-abc" } },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }),
+    };
+
+    fetchMock.mockResolvedValueOnce(toolCallResponse);
+    const google = createGoogleProvider({ apiKey: "g-free" });
+    const first = await google.chat({
+      model: "gemini-3.5-flash-lite",
+      messages: [{ role: "user", content: "search mars" }],
+    });
+    expect(first.message.tool_calls?.[0]?.extra_content).toEqual({
+      google: { thought_signature: "SIG-abc" },
+    });
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }),
+    });
+    await google.chat({
+      model: "gemini-3.5-flash-lite",
+      messages: [
+        { role: "user", content: "search mars" },
+        first.message,
+        { role: "tool", tool_call_id: "call_1", content: '{"ok":true}' },
+      ],
+    });
+
+    const replay = JSON.parse(
+      String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)
+    ) as { messages: Array<{ tool_calls?: Array<Record<string, unknown>> }> };
+    expect(replay.messages[1].tool_calls?.[0]?.extra_content).toEqual({
+      google: { thought_signature: "SIG-abc" },
+    });
+
+    // A strict OpenAI-shaped vendor rejects unknown fields, so the same message must be
+    // sent there without it.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }),
+    });
+    const plain = createOpenAIProvider({ apiKey: "sk-test" });
+    await plain.chat({
+      model: "gpt-5-mini",
+      messages: [
+        { role: "user", content: "search mars" },
+        first.message,
+        { role: "tool", tool_call_id: "call_1", content: '{"ok":true}' },
+      ],
+    });
+    const strict = JSON.parse(
+      String((fetchMock.mock.calls[2] as [string, RequestInit])[1].body)
+    ) as { messages: Array<{ tool_calls?: Array<Record<string, unknown>> }> };
+    expect(strict.messages[1].tool_calls?.[0]).not.toHaveProperty("extra_content");
   });
 });

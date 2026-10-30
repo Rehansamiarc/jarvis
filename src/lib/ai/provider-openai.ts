@@ -51,12 +51,19 @@ interface OpenAIProviderOptions {
    * and an unrecognised parameter fails the whole request — so it can be disabled.
    */
   tokenParam?: "max_completion_tokens" | "max_tokens" | "none";
+  /**
+   * Echo `extra_content` back on replayed tool calls. Google's shim requires the
+   * `thought_signature` it issued; OpenAI and Groq reject unknown fields, so this is
+   * opt-in per provider rather than always-on.
+   */
+  passThroughToolExtras?: boolean;
 }
 
 export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvider {
   const baseUrl = (options.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "");
   const providerId = options.id ?? "openai";
   const tokenParam = options.tokenParam ?? "max_completion_tokens";
+  const passThroughToolExtras = options.passThroughToolExtras ?? false;
   const capabilities: ProviderCapabilities = {
     tools: true,
     json: true,
@@ -131,10 +138,35 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
 
       const payload: Record<string, unknown> = {
         model,
-        messages: request.messages satisfies ChatMessage[],
+        messages: request.messages.map((message): ChatMessage => {
+          if (!message.tool_calls?.length) return message;
+          return {
+            ...message,
+            tool_calls: message.tool_calls.map((call) => {
+              if (passThroughToolExtras && call.extra_content) {
+                return { ...call, extra_content: call.extra_content };
+              }
+              // Strip vendor-only metadata: strict OpenAI-shaped APIs 400 on it.
+              const rest: ToolCall = { ...call };
+              delete rest.extra_content;
+              return rest;
+            }),
+          };
+        }) satisfies ChatMessage[],
       };
       if (request.tools?.length) {
-        payload.tools = request.tools satisfies ToolSpec[];
+        // The wire format is `{type:"function", function:{name,description,parameters}}`.
+        // Sending the internal ToolSpec as-is is rejected by every endpoint (Gemini's
+        // shim reports `Unknown name "name" at 'tools[0]'`), which silently broke tool
+        // calling for the whole agent loop.
+        payload.tools = request.tools.map((spec: ToolSpec) => ({
+          type: "function",
+          function: {
+            name: spec.name,
+            description: spec.description,
+            parameters: spec.parameters,
+          },
+        }));
         payload.tool_choice = "auto";
       }
       if (request.temperature !== undefined) payload.temperature = request.temperature;
@@ -170,6 +202,9 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
               id: t.id,
               type: "function",
               function: { name: t.function.name, arguments: t.function.arguments ?? "{}" },
+              // Keep the raw object untouched: it is opaque vendor data that must be
+              // replayed byte-for-byte, not something to reinterpret.
+              ...(t.extra_content ? { extra_content: t.extra_content } : {}),
             })
           ),
         },

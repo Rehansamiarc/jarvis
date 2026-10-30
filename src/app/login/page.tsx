@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Loader2, Mail, Lock } from "lucide-react";
+import { Loader2, Mail, Lock, Sparkles } from "lucide-react";
 import SparkOrb from "@/components/SparkOrb";
 
 /**
@@ -17,6 +17,7 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
   const [error, setError] = useState<string | null>(params.get("error"));
   const [sent, setSent] = useState(false);
 
@@ -49,6 +50,25 @@ function LoginForm() {
       setError((err as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Demo entry: the server provisions/reuses a pre-confirmed demo account and returns a
+   * normal Supabase session, so the dashboard is reachable without a confirmation email.
+   */
+  async function enterDemo() {
+    setError(null);
+    setDemoBusy(true);
+    try {
+      const response = await fetch("/api/auth/demo", { method: "POST" });
+      const body = (await response.json().catch(() => ({}))) as { error?: string; redirect?: string };
+      if (!response.ok) throw new Error(body.error ?? "Demo sign-in failed.");
+      router.replace(next);
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+      setDemoBusy(false);
     }
   }
 
@@ -128,14 +148,31 @@ function LoginForm() {
         </div>
       )}
 
-      <button type="submit" disabled={busy} className="btn btn-primary w-full">
+      <button type="submit" disabled={busy || demoBusy} className="btn btn-primary w-full">
         {busy && <Loader2 size={15} className="animate-spin" />}
         {mode === "password" ? "Sign in" : "Send sign-in link"}
       </button>
 
+      <div className="my-4 flex items-center gap-3 text-[0.62rem] uppercase tracking-[0.2em] text-faint">
+        <span className="h-px flex-1 bg-line" />
+        or
+        <span className="h-px flex-1 bg-line" />
+      </div>
+
+      <button
+        type="button"
+        onClick={enterDemo}
+        disabled={busy || demoBusy}
+        className="btn btn-ghost w-full"
+      >
+        {demoBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+        {demoBusy ? "Opening demo…" : "Explore the demo — no email needed"}
+      </button>
+
       <p className="mt-4 text-center text-xs text-faint">
         First time? The same form creates your account — Supabase sends a confirmation email on
-        first sign-up.
+        first sign-up. The demo account is shared and isolated by Row Level Security: never
+        connect real accounts to it.
       </p>
     </form>
   );

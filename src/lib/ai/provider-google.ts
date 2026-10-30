@@ -40,6 +40,9 @@ export function createGoogleProvider(options: GoogleProviderOptions): ModelProvi
     // and sending it matters — an uncapped reasoning model can spend a minute of latency
     // on reasoning tokens before returning nothing at all.
     tokenParam: "max_tokens",
+    // Gemini 3.x answers a replayed function call with HTTP 400 unless the
+    // `thought_signature` it returned is sent back inside `tool_calls[].extra_content`.
+    passThroughToolExtras: true,
   });
 
   async function embedOne(text: string, model: string): Promise<number[]> {

@@ -2,7 +2,16 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { env } from "@/lib/env";
 
-const PUBLIC_PATHS = ["/login", "/auth", "/auth/callback", "/api/health", "/api/cron", "/api/oauth"];
+const PUBLIC_PATHS = [
+  "/login",
+  "/auth",
+  "/auth/callback",
+  "/api/health",
+  "/api/cron",
+  "/api/oauth",
+  // Demo sign-in must be reachable before any session exists; it issues the first one.
+  "/api/auth/demo",
+];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
