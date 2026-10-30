@@ -13,7 +13,7 @@ import type { AppConfig, VoiceSettings } from "./ipc";
  */
 
 /** Origin of the brain this build ships pointing at; overridable in Settings. */
-export const DEFAULT_BRAIN_URL = "https://site-df8c8a19e6764755a80a82add25ed227.freebuff.page";
+export const DEFAULT_BRAIN_URL = "https://jarvis-rehan-raja.vercel.app";
 
 export const VOICE_LIMITS = {
   rate: { min: 0.5, max: 2, default: 1 },

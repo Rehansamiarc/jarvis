@@ -14,6 +14,8 @@ import type {
   VoiceSettings,
   WakeWordStatus,
 } from "./ipc";
+import { copyToClipboard, notify, openApp, runLocalCommand, searchFiles } from "./actions";
+import { describeCommand, parseLocalCommand, resolveApp, type LocalCommand } from "./commandRouter";
 import { buildTrayMenu, createTrayIcon, showWindow } from "./tray";
 import { createWakeWordEngine, inspectWakeWord, type WakeWordEngine } from "./wakeword";
 
@@ -77,6 +79,20 @@ function privacyState(): PrivacyState {
 function emitPrivacy(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("privacy:changed", privacyState());
+  }
+}
+
+/**
+ * Tells the window that a local device action ran, so the transcript shows what the app
+ * did on this machine rather than only what the brain said.
+ */
+function emitLocalAction(command: LocalCommand, outcome: { ok: boolean }): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("device:action", {
+      description: describeCommand(command),
+      ok: outcome.ok,
+      at: Date.now(),
+    });
   }
 }
 
@@ -276,9 +292,46 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("agent:run", async (_event, message: string) => {
+    const text = String(message ?? "").slice(0, 12_000);
+
+    // Fast path: a literal device instruction ("open Chrome", "find my file tax.pdf")
+    // is performed here, with no model call and no network dependency. Anything that is
+    // not an exact match returns null and goes to the brain exactly as before.
+    const local = parseLocalCommand(text);
+    if (local.kind !== "none") {
+      const outcome = await runLocalCommand(local);
+      if (outcome) {
+        emitLocalAction(local, outcome);
+        return { reply: outcome.reply, detail: outcome.detail };
+      }
+    }
+
     const client = await brainClient();
-    return client.runAgent(String(message ?? "").slice(0, 12_000));
+    return client.runAgent(text);
   });
+
+  // Explicit device channels for the UI (buttons, and confirmations the user clicked).
+  ipcMain.handle("device:openApp", async (_event, name: string) => {
+    const app = resolveApp(String(name ?? ""));
+    if (!app) {
+      return { ok: false, reply: `“${name}” is not on the approved app list.`, detail: "not_allowlisted" };
+    }
+    return openApp(app);
+  });
+
+  ipcMain.handle("device:searchFiles", async (_event, query: string, limit?: number) => {
+    const matches = await searchFiles(
+      String(query ?? "").slice(0, 200),
+      Math.min(Math.max(Number(limit) || 12, 1), 50)
+    );
+    return { ok: true, reply: `${matches.length} match(es).`, detail: "search complete", data: matches };
+  });
+
+  ipcMain.handle("device:notify", (_event, title: string, body: string) =>
+    notify(String(title ?? "JARVIS").slice(0, 120), String(body ?? "").slice(0, 500))
+  );
+
+  ipcMain.handle("device:copy", (_event, text: string) => copyToClipboard(String(text ?? "").slice(0, 20_000)));
 
   ipcMain.handle("external:open", (_event, url: string) => {
     if (typeof url === "string" && /^https?:\/\//i.test(url)) void shell.openExternal(url);

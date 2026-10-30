@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppConfig, DesktopApi, PrivacyState, VoiceSettings } from "./ipc";
+import type { AppConfig, DesktopApi, DeviceActionEvent, PrivacyState, VoiceSettings } from "./ipc";
 
 /**
  * The only bridge between the page and Node.
@@ -28,6 +28,17 @@ const api: DesktopApi = {
   setCapturing: (value: boolean) => ipcRenderer.invoke("privacy:setCapturing", value),
 
   runAgent: (message: string) => ipcRenderer.invoke("agent:run", message),
+
+  openApp: (name: string) => ipcRenderer.invoke("device:openApp", name),
+  searchFiles: (query: string, limit?: number) => ipcRenderer.invoke("device:searchFiles", query, limit),
+  notify: (title: string, body: string) => ipcRenderer.invoke("device:notify", title, body),
+  copyText: (text: string) => ipcRenderer.invoke("device:copy", text),
+
+  onDeviceAction: (handler: (event: DeviceActionEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: DeviceActionEvent) => handler(payload);
+    ipcRenderer.on("device:action", listener);
+    return () => ipcRenderer.removeListener("device:action", listener);
+  },
 
   pushAudioFrames: (frames: Int16Array) => ipcRenderer.send("wakeword:frame", frames),
   openExternal: (url: string) => ipcRenderer.invoke("external:open", url),

@@ -74,6 +74,27 @@ export interface AgentRunResult {
   detail: string;
 }
 
+/** Result of a local device action performed by the desktop app itself. */
+export interface DeviceOutcome {
+  ok: boolean;
+  /** What the assistant says back — worded to match what actually happened. */
+  reply: string;
+  detail: string;
+  data?: unknown;
+}
+
+/** Emitted when a spoken command was handled on this machine instead of by the brain. */
+export interface DeviceActionEvent {
+  description: string;
+  ok: boolean;
+  at: number;
+}
+
+export interface FileMatch {
+  path: string;
+  name: string;
+}
+
 export interface CheckResult {
   ok: boolean;
   detail: string;
@@ -106,6 +127,13 @@ export interface DesktopApi {
   setCapturing(capturing: boolean): Promise<PrivacyState>;
 
   runAgent(message: string): Promise<AgentRunResult>;
+
+  /** Device actions. Every target is checked against the allowlist in the main process. */
+  openApp(name: string): Promise<DeviceOutcome>;
+  searchFiles(query: string, limit?: number): Promise<DeviceOutcome>;
+  notify(title: string, body: string): Promise<DeviceOutcome>;
+  copyText(text: string): Promise<DeviceOutcome>;
+  onDeviceAction(handler: (event: DeviceActionEvent) => void): () => void;
 
   /** Push captured 16 kHz mono Int16 frames to the wake-word engine. */
   pushAudioFrames(frames: Int16Array): void;
