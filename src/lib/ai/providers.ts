@@ -54,7 +54,7 @@ export interface ProviderPreset {
   notes: string;
 }
 
-const GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai";
+export const GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai";
 export const GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
@@ -81,12 +81,28 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
     label: "Google Gemini (free tier)",
     keyEnvs: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
     baseUrl: () => GEMINI_OPENAI_BASE,
+    /**
+     * Measured against the live shim, not copied from a model list. Latency is for a
+     * one-line prompt with a 200-token cap:
+     *
+     *   gemini-3.5-flash-lite   1.9s  answered
+     *   gemini-3.1-flash-lite   2.0s  answered
+     *   gemini-3.5-flash        4.8s  answered
+     *   gemini-3.8-flash       82.0s  finish_reason=length, EMPTY content
+     *   gemini-3.7-flash      >100s   timed out
+     *   gemini-flash-latest      —    503 overloaded
+     *   gemini-2.5-flash         —    404 on the shim (native-only)
+     *
+     * The Flash-Lite models carry the conversational roles because two seconds is what
+     * makes voice mode feel like a conversation at all; the full Flash model takes the
+     * roles where reasoning quality is worth the extra three seconds.
+     */
     defaults: {
-      primary: "gemini-3.8-flash",
-      coding: "gemini-3.8-flash",
-      research: "gemini-3.8-flash",
+      primary: "gemini-3.5-flash-lite",
+      coding: "gemini-3.5-flash",
+      research: "gemini-3.5-flash",
       summary: "gemini-3.5-flash-lite",
-      vision: "gemini-3.8-flash",
+      vision: "gemini-3.5-flash",
       speech: "gemini-3.5-flash-lite",
       embedding: "gemini-embedding-001",
     },

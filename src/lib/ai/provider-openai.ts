@@ -50,7 +50,7 @@ interface OpenAIProviderOptions {
    * `max_completion_tokens`; some vendors (Gemini's shim, Ollama) document neither,
    * and an unrecognised parameter fails the whole request — so it can be disabled.
    */
-  tokenParam?: "max_completion_tokens" | "none";
+  tokenParam?: "max_completion_tokens" | "max_tokens" | "none";
 }
 
 export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvider {
@@ -140,7 +140,8 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
       if (request.temperature !== undefined) payload.temperature = request.temperature;
       if (request.maxOutputTokens !== undefined && tokenParam !== "none") {
         // Newer reasoning models reject `max_tokens`; they want `max_completion_tokens`.
-        payload.max_completion_tokens = request.maxOutputTokens;
+        // Vendors that only document the older name (Gemini's shim) use `max_tokens`.
+        payload[tokenParam] = request.maxOutputTokens;
       }
       if (request.json && capabilities.json) {
         payload.response_format = { type: "json_object" };

@@ -73,8 +73,10 @@ describe("provider registry", () => {
   it("offers a free fallback model for every role it can actually serve", () => {
     setEnv({ GOOGLE_API_KEY: "g-free" });
 
+    // The default is the measured fast model, not the newest name in the catalogue:
+    // gemini-3.8-flash took 82s and returned empty content for a one-line prompt.
     const chat = envCandidatesFor("primary");
-    expect(chat[0]).toEqual({ provider: "google", model: "gemini-3.8-flash" });
+    expect(chat[0]).toEqual({ provider: "google", model: "gemini-3.5-flash-lite" });
 
     // Groq has no embeddings endpoint, so it must never be offered for that role.
     setEnv({ GOOGLE_API_KEY: "g-free", GROQ_API_KEY: "gsk-x" });
@@ -121,8 +123,10 @@ describe("Google embeddings transport", () => {
 
   it("batches a chunking pass instead of firing one request per text", async () => {
     fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
-      const body = JSON.parse(String(init.body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
-      return okResponse([body.contents[0].parts[0].text.length]);
+      // embedContent takes a singular `content`; the plural `contents` array is a
+      // generateContent field and is rejected with 400 Unknown name "contents".
+      const body = JSON.parse(String(init.body)) as { content: { parts: Array<{ text: string }> } };
+      return okResponse([body.content.parts[0].text.length]);
     });
 
     const provider = createGoogleProvider({ apiKey: "g-free" });
@@ -302,8 +306,8 @@ describe("routing with no paid key", () => {
 
     // gpt-5-mini is dropped before the callback runs — it cannot even be built
     // without OPENAI_API_KEY — so the free Gemini candidate is the only one tried.
-    expect(answer).toBe("gemini-3.8-flash");
-    expect(tried).toEqual(["gemini-3.8-flash"]);
+    expect(answer).toBe("gemini-3.5-flash-lite");
+    expect(tried).toEqual(["gemini-3.5-flash-lite"]);
   });
 
   it("routes a gemini model name to Google even when the row says openai", async () => {
@@ -331,5 +335,42 @@ describe("routing with no paid key", () => {
     await expect(
       withModelFallback(configClient(OPENAI_ONLY_ROWS), "primary", null, async (p) => p.id)
     ).rejects.toThrow(/OPENAI_API_KEY is not configured/);
+  });
+});
+
+describe("Gemini chat transport", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+  });
+
+  it("caps output with max_tokens, so a reasoning model cannot answer nothing", async () => {
+    // Regression: the shim documents `max_tokens`, not `max_completion_tokens`. With no
+    // cap sent, gemini-3.8-flash spent 82s on reasoning tokens and returned
+    // finish_reason "length" with empty content — a hang followed by a failed reply.
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { role: "assistant", content: "JARVIS online" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 3, completion_tokens: 2 },
+        model: "gemini-3.5-flash-lite",
+      }),
+    });
+
+    const provider = createGoogleProvider({ apiKey: "g-free" });
+    await provider.chat({
+      model: "gemini-3.5-flash-lite",
+      messages: [{ role: "user", content: "Reply with exactly: JARVIS online" }],
+      maxOutputTokens: 64,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.max_tokens).toBe(64);
+    expect(body.max_completion_tokens).toBeUndefined();
   });
 });

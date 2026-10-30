@@ -249,7 +249,22 @@ export async function withModelFallback<T>(
           message
         );
 
-      if ((isTransient || isUnavailable || looksLikeCapability || missingModel) && chain.length > 1) {
+      // A rejected credential (401/403) belongs to *this* provider's configuration, not to
+      // the request: the key may be expired, revoked, or pasted into the wrong variable.
+      // Treating it as request-level would let one stale key brick the whole assistant
+      // even when a working free provider sits next in the chain. If every candidate
+      // rejects its key, the aggregate error below still names each one.
+      const rejectedCredentials =
+        error instanceof ProviderError && (error.status === 401 || error.status === 403);
+
+      if (
+        (isTransient ||
+          isUnavailable ||
+          looksLikeCapability ||
+          missingModel ||
+          rejectedCredentials) &&
+        chain.length > 1
+      ) {
         errors.push(`${candidate.model}: ${message}`);
         continue;
       }

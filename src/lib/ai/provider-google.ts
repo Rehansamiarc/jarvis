@@ -1,6 +1,6 @@
 import "server-only";
 import { env } from "@/lib/env";
-import { GEMINI_NATIVE_BASE } from "./providers";
+import { GEMINI_NATIVE_BASE, GEMINI_OPENAI_BASE } from "./providers";
 import { createOpenAIProvider, ProviderError, ProviderUnavailableError } from "./provider-openai";
 import type { ModelProvider, ProviderCapabilities } from "./types";
 
@@ -13,8 +13,10 @@ import type { ModelProvider, ProviderCapabilities } from "./types";
  * `embedContent` call — which is also the only way to ask for a specific dimension,
  * and 1536 is one of the sizes Google explicitly supports (default is 3072).
  *
- * Token caps are not sent: the shim does not document `max_completion_tokens`, and a
- * rejected parameter would break every call where the agent caps its own output.
+ * Output is capped with the classic `max_tokens` name, which the shim honours (verified
+ * against the live endpoint). It is not optional: `gemini-3.8-flash` spent 82 seconds on
+ * reasoning tokens and then returned `finish_reason: "length"` with empty content when
+ * uncapped, so an uncapped request can look like a hang and still answer nothing.
  */
 
 const EMBED_CONCURRENCY = 3;
@@ -30,9 +32,14 @@ export function createGoogleProvider(options: GoogleProviderOptions): ModelProvi
   const chat = createOpenAIProvider({
     id: "google",
     apiKey: options.apiKey,
-    baseUrl: options.baseUrl,
+    // Default to Google's shim, never to the OpenAI transport's own default: sending a
+    // Gemini key to api.openai.com would spend a request on a guaranteed 401.
+    baseUrl: options.baseUrl ?? GEMINI_OPENAI_BASE,
     capabilities: options.capabilities,
-    tokenParam: "none",
+    // The shim accepts the classic `max_tokens` name (verified: it caps the response),
+    // and sending it matters — an uncapped reasoning model can spend a minute of latency
+    // on reasoning tokens before returning nothing at all.
+    tokenParam: "max_tokens",
   });
 
   async function embedOne(text: string, model: string): Promise<number[]> {
@@ -45,9 +52,14 @@ export function createGoogleProvider(options: GoogleProviderOptions): ModelProvi
           "content-type": "application/json",
           "x-goog-api-key": options.apiKey,
         },
+        // `embedContent` (single text) takes a singular `content` object; the plural
+        // `contents` array only exists on `generateContent`. Sending the plural form here
+        // is answered with 400 `Unknown name "contents"`, which is why every document
+        // ingestion and memory embedding failed. The model is addressed by the URL path
+        // only, so it is not repeated in the body.
         body: JSON.stringify({
           model: `models/${model}`,
-          contents: [{ parts: [{ text }] }],
+          content: { parts: [{ text }] },
           outputDimensionality: env().JARVIS_EMBEDDING_DIM ?? 1536,
         }),
         signal: controller.signal,

@@ -92,6 +92,26 @@ describe("fallback handling", () => {
     expect(result).toBe("gpt-5-mini");
   });
 
+  it("falls through when a provider rejects its key (401) instead of failing the request", async () => {
+    // Real case: a stale sk-proj-… key in OPENAI_API_KEY. OpenAI is first in the provider
+    // order, so a 401 used to abort the whole chain and make chat unusable even though a
+    // working Gemini key was configured.
+    const tried: string[] = [];
+    const result = await withModelFallback(
+      configClient(),
+      "coding",
+      null,
+      async (_provider, model) => {
+        tried.push(model.model);
+        if (tried.length === 1) throw new ProviderError("invalid_api_key", 401, false, model.model);
+        return `answered by ${model.model}`;
+      }
+    );
+
+    expect(tried).toEqual(["gpt-5", "gpt-5-mini"]);
+    expect(result).toBe("answered by gpt-5-mini");
+  });
+
   it("rethrows a genuine request error instead of blaming the next model", async () => {
     const tried: string[] = [];
     await expect(
